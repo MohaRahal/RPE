@@ -271,22 +271,23 @@ Após realizar todos estes passos a sua aplicação deverá estar apta para func
     ```
 
 3. **Dentro do arquivo app/Http/Kernel.php**
-<br>
-    ```php
-        protected $middleware = [
-            \App\Http\Middleware\FakeLoginKey::class,
-            ...
-            //restante das classes
-        ]
-        protected $middlewareGroups = [
-            'web' => [
-            \App\Http\Middleware\FakeLoginKey::class,
-            ...
-            //restante das classes
-            ],
-            ...
-            //restante das classes
-        ]    
-    ```
+   ```php
+         protected $middleware = [
+             \App\Http\Middleware\FakeLoginKey::class,
+             ...
+             //restante das classes
+         ]
+         protected $middlewareGroups = [
+             'web' => [
+             \App\Http\Middleware\FakeLoginKey::class,
+             ...
+             //restante das classes
+             ],
+             ...
+             //restante das classes
+         ]    
+   ```
 
 Assim, voce tera acesso ao RPE sem precisar estar na rede coporativa, podendo utilizar todos os serviços disponíveis.
+
+
