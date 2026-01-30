@@ -1,98 +1,77 @@
-import React, { createContext, useState, useEffect } from "react";
-import keycloak, { initKeycloak } from "./keycloak";
-import { API_ME_ENDPOINT } from "./services/api";
+<?php
 
-export const AuthContext = createContext();
+namespace App\Http\Middleware;
 
-const useKeycloak = import.meta.env.VITE_USE_KEYCLOAK === "true";
+use Closure;
+use Illuminate\Http\Request;
+use App\Models\User;
+use Firebase\JWT\JWT;
+use Firebase\JWT\JWK;
 
-export const AuthProvider = ({ children }) => {
-  const [loading, setLoading] = useState(true);       
-  const [authenticated, setAuthenticated] = useState(false);
-  const [authorized, setAuthorized] = useState(false);
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
+class KeycloakAuth
+{
+    public function handle(Request $request, Closure $next)
+    {
+        // Se Keycloak estiver desativado, apenas pega o usuário do teste
+        if (!env('KEYCLOAK_ENABLED', true)) {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['error' => 'Token não informado'], 401);
+            }
 
-  // Função para buscar dados do usuário
-  const fetchUserData = (authToken) => {
-    fetch(API_ME_ENDPOINT, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    })
-      .then((res) => {
-        if (res.status === 403) {
-          setAuthorized(false);
-          return null;
+            // Decodifica o token base64 para extrair o email
+            try {
+                $decoded = base64_decode($token, true);
+                if ($decoded === false) {
+                    $email = $token; // Se não for base64 válido, trata como email
+                } else {
+                    $parts = explode(':', $decoded);
+                    $email = $parts[0] ?? $token;
+                }
+            } catch (\Exception $e) {
+                $email = $token;
+            }
+
+            $user = User::where('email', $email)->first();
+
+            if (!$user || $user->status != 1) {
+                return response()->json(['error' => 'Usuário inválido'], 403);
+            }
+
+            $request->attributes->set('user', $user);
+            return $next($request);
         }
-        if (!res.ok) throw new Error("Erro ao buscar dados do usuário");
-        return res.json();
-      })
-      .then((data) => {
-        if (data) {
-          setUser(data);  
-          setAuthorized(true);
-          setToken(authToken);
+
+        // Modo Keycloak normal
+        $token = $request->bearerToken();
+        if (!$token) {
+            return response()->json(['error' => 'Token não informado'], 401);
         }
-      })
-      .catch((err) => {
-        console.log("Erro ao acessar dados do usuário:", err);
-        setAuthorized(false);
-      })
-      .finally(() => setLoading(false));
-  };
 
-  useEffect(() => {
-    if (useKeycloak) {
-      // Modo Keycloak
-      initKeycloak()
-        .then((auth) => {
-          if (!auth) {
-            setLoading(false);
-            return;
-          }
+        try {
+            $keycloakUrl = env('KEYCLOAK_URL', 'http://localhost:8080');
+            $keycloakRealm = env('KEYCLOAK_REALM', 'SITT');
+            $jwksUrl = "{$keycloakUrl}/realms/{$keycloakRealm}/protocol/openid-connect/certs";
+            
+            $jwks = json_decode(file_get_contents($jwksUrl), true);
+            $decoded = JWT::decode($token, JWK::parseKeySet($jwks));
 
-          setAuthenticated(true);
+            $email = $decoded->email ?? $decoded->preferred_username ?? null;
 
-          // Atualizar token a cada 60 segundos
-          setInterval(() => {
-            keycloak.updateToken(60).catch(() => console.log("Falha ao atualizar token"));
-          }, 60000);
+            if (!$email) {
+                return response()->json(['error' => 'Email não encontrado no token'], 401);
+            }
 
-          fetchUserData(keycloak.token);
-        })
-        .catch((err) => {
-          console.log("Erro ao inicializar Keycloak:", err);
-          setLoading(false);
-        });
-    } else {
-      // Modo autenticação simples (email)
-      const storedEmail = localStorage.getItem("userEmail");
-      const storedToken = localStorage.getItem("userToken");
-      
-      if (storedEmail && storedToken) {
-        setAuthenticated(true);
-        fetchUserData(storedToken);
-      } else {
-        setLoading(false);
-      }
+            $user = User::where('email', $email)->first();
+            if (!$user || $user->status != 1) {
+                return response()->json(['error' => 'Usuário inválido'], 403);
+            }
+
+            $request->attributes->set('user', $user);
+            return $next($request);
+
+        } catch (\Exception $e) {
+            return response()->json(['error' => 'Token inválido', 'message' => $e->getMessage()], 401);
+        }
     }
-  }, []);
-
-  const logout = () => {
-    setAuthenticated(false);
-    setAuthorized(false);
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem("userEmail");
-    localStorage.removeItem("userToken");
-    
-    if (useKeycloak && keycloak.logout) {
-      keycloak.logout();
-    }
-  };
-
-  return (
-    <AuthContext.Provider value={{ loading, authenticated, authorized, user, token, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
+}
