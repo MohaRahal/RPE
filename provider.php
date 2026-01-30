@@ -1,152 +1,98 @@
-import React, { useState, useEffect, useContext } from "react";
-import { useNavigate } from "react-router-dom";
-import { AuthContext } from "../AuthProvider";
-import keycloak, { initKeycloak } from "../keycloak";
+import React, { createContext, useState, useEffect } from "react";
+import keycloak, { initKeycloak } from "./keycloak";
+import { API_ME_ENDPOINT } from "./services/api";
+
+export const AuthContext = createContext();
 
 const useKeycloak = import.meta.env.VITE_USE_KEYCLOAK === "true";
 
-export default function LoginForm() {
-  const [email, setEmail] = useState("");
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
-  const { authenticated, loading: authLoading } = useContext(AuthContext);
+export const AuthProvider = ({ children }) => {
+  const [loading, setLoading] = useState(true);       
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authorized, setAuthorized] = useState(false);
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(null);
 
-  // Se já está autenticado, redireciona para home
+  // Função para buscar dados do usuário
+  const fetchUserData = (authToken) => {
+    fetch(API_ME_ENDPOINT, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((res) => {
+        if (res.status === 403) {
+          setAuthorized(false);
+          return null;
+        }
+        if (!res.ok) throw new Error("Erro ao buscar dados do usuário");
+        return res.json();
+      })
+      .then((data) => {
+        if (data) {
+          setUser(data);  
+          setAuthorized(true);
+          setToken(authToken);
+        }
+      })
+      .catch((err) => {
+        console.log("Erro ao acessar dados do usuário:", err);
+        setAuthorized(false);
+      })
+      .finally(() => setLoading(false));
+  };
+
   useEffect(() => {
-    if (authenticated && !authLoading) {
-      navigate("/", { replace: true });
-    }
-  }, [authenticated, authLoading, navigate]);
+    if (useKeycloak) {
+      // Modo Keycloak
+      initKeycloak()
+        .then((auth) => {
+          if (!auth) {
+            setLoading(false);
+            return;
+          }
 
-  const handleKeycloakLogin = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      const auth = await initKeycloak();
-      if (auth) {
-        // Keycloak faz a autenticação automaticamente
-        window.location.href = "/";
-      }
-    } catch (err) {
-      setError("Erro ao inicializar autenticação com Keycloak");
-      setLoading(false);
-    }
-  };
+          setAuthenticated(true);
 
-  const handleSimpleLogin = async (e) => {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
+          // Atualizar token a cada 60 segundos
+          setInterval(() => {
+            keycloak.updateToken(60).catch(() => console.log("Falha ao atualizar token"));
+          }, 60000);
 
-    try {
-      // Valida se é um email válido
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        throw new Error("Por favor, insira um email válido");
-      }
-
-      const apiUrl = import.meta.env.VITE_API_URL || "http://192.168.137.23:8000/api";
-      const res = await fetch(apiUrl + "/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ email }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message || "Email não registrado ou inativo");
-      }
-
-      const data = await res.json();
+          fetchUserData(keycloak.token);
+        })
+        .catch((err) => {
+          console.log("Erro ao inicializar Keycloak:", err);
+          setLoading(false);
+        });
+    } else {
+      // Modo autenticação simples (email)
+      const storedEmail = localStorage.getItem("userEmail");
+      const storedToken = localStorage.getItem("userToken");
       
-      // Armazena email e token no localStorage
-      localStorage.setItem("userEmail", email);
-      localStorage.setItem("userToken", data.token || email);
+      if (storedEmail && storedToken) {
+        setAuthenticated(true);
+        fetchUserData(storedToken);
+      } else {
+        setLoading(false);
+      }
+    }
+  }, []);
 
-      // Aguarda um pouco para garantir que o localStorage foi atualizado
-      setTimeout(() => {
-        navigate("/", { replace: true });
-      }, 100);
-    } catch (err) {
-      setError(err.message);
-      setLoading(false);
+  const logout = () => {
+    setAuthenticated(false);
+    setAuthorized(false);
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem("userEmail");
+    localStorage.removeItem("userToken");
+    
+    if (useKeycloak && keycloak.logout) {
+      keycloak.logout();
     }
   };
-
-  if (authLoading) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-100">
-        <div className="text-center">
-          <p className="text-gray-600">Carregando...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (useKeycloak) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-100">
-        <div className="bg-white p-8 rounded-lg shadow-lg max-w-md w-full">
-          <h1 className="text-2xl font-bold text-center mb-6">Login</h1>
-          <p className="text-gray-600 text-center mb-6">
-            Você será redirecionado para o Keycloak para autenticação
-          </p>
-
-          <button
-            onClick={handleKeycloakLogin}
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded"
-          >
-            {loading ? "Autenticando..." : "Entrar com Keycloak"}
-          </button>
-
-          {error && (
-            <p className="text-red-500 text-center mt-4">{error}</p>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div className="flex items-center justify-center h-screen bg-gray-100">
-      <div className="bg-white p-8 rounded-lg shadow-lg max-w-md w-full">
-        <h1 className="text-2xl font-bold text-center mb-6">Login</h1>
-
-        <form onSubmit={handleSimpleLogin}>
-          <div className="mb-4">
-            <label className="block text-gray-700 font-bold mb-2">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              disabled={loading}
-              className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:border-blue-500 disabled:bg-gray-100"
-              placeholder="seu@email.com"
-            />
-          </div>
-
-          {error && (
-            <p className="text-red-500 text-sm mb-4">{error}</p>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold py-2 px-4 rounded"
-          >
-            {loading ? "Autenticando..." : "Entrar"}
-          </button>
-        </form>
-
-        <p className="text-gray-600 text-center text-sm mt-6">
-          Use email corporativo para login.
-        </p>
-      </div>
-    </div>
+    <AuthContext.Provider value={{ loading, authenticated, authorized, user, token, logout }}>
+      {children}
+    </AuthContext.Provider>
   );
-}
+};
