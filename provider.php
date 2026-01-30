@@ -1,77 +1,29 @@
-<?php
+import { useContext } from "react";
+import { Navigate } from "react-router-dom";
+import { AuthContext } from "../AuthProvider";
 
-namespace App\Http\Middleware;
+export default function ProtectedRoute({ children, allowedRoles }) {
 
-use Closure;
-use Illuminate\Http\Request;
-use App\Models\User;
-use Firebase\JWT\JWT;
-use Firebase\JWT\JWK;
+  const { user, loading, authenticated, authorized } = useContext(AuthContext);
 
-class KeycloakAuth
-{
-    public function handle(Request $request, Closure $next)
-    {
-        // Se Keycloak estiver desativado, apenas pega o usuário do teste
-        if (!env('KEYCLOAK_ENABLED', true)) {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return response()->json(['error' => 'Token não informado'], 401);
-            }
+  if (loading) {
+    return <div className="flex items-center justify-center h-screen">Carregando...</div>;
+  }
 
-            // Decodifica o token base64 para extrair o email
-            try {
-                $decoded = base64_decode($token, true);
-                if ($decoded === false) {
-                    $email = $token; // Se não for base64 válido, trata como email
-                } else {
-                    $parts = explode(':', $decoded);
-                    $email = $parts[0] ?? $token;
-                }
-            } catch (\Exception $e) {
-                $email = $token;
-            }
+  // Se não está autenticado, redireciona para login
+  if (!authenticated) {
+    return <Navigate to="/login" replace />;
+  }
 
-            $user = User::where('email', $email)->first();
+  // Se não está autorizado (usuário inativo ou validação falhou)
+  if (!authorized || user === null) {
+    return <Navigate to="/login" replace />;
+  }
+  
+  // Se não tem permissão para acessar a rota
+  if (allowedRoles && !allowedRoles.includes(user.acesso)) {
+    return <Navigate to="/error" replace />;
+  }
 
-            if (!$user || $user->status != 1) {
-                return response()->json(['error' => 'Usuário inválido'], 403);
-            }
-
-            $request->attributes->set('user', $user);
-            return $next($request);
-        }
-
-        // Modo Keycloak normal
-        $token = $request->bearerToken();
-        if (!$token) {
-            return response()->json(['error' => 'Token não informado'], 401);
-        }
-
-        try {
-            $keycloakUrl = env('KEYCLOAK_URL', 'http://localhost:8080');
-            $keycloakRealm = env('KEYCLOAK_REALM', 'SITT');
-            $jwksUrl = "{$keycloakUrl}/realms/{$keycloakRealm}/protocol/openid-connect/certs";
-            
-            $jwks = json_decode(file_get_contents($jwksUrl), true);
-            $decoded = JWT::decode($token, JWK::parseKeySet($jwks));
-
-            $email = $decoded->email ?? $decoded->preferred_username ?? null;
-
-            if (!$email) {
-                return response()->json(['error' => 'Email não encontrado no token'], 401);
-            }
-
-            $user = User::where('email', $email)->first();
-            if (!$user || $user->status != 1) {
-                return response()->json(['error' => 'Usuário inválido'], 403);
-            }
-
-            $request->attributes->set('user', $user);
-            return $next($request);
-
-        } catch (\Exception $e) {
-            return response()->json(['error' => 'Token inválido', 'message' => $e->getMessage()], 401);
-        }
-    }
+  return children;
 }
