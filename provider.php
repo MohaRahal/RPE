@@ -1,29 +1,48 @@
-import { useContext } from "react";
-import { Navigate } from "react-router-dom";
-import { AuthContext } from "../AuthProvider";
+<?php
 
-export default function ProtectedRoute({ children, allowedRoles }) {
+namespace App\Http\Controllers;
 
-  const { user, loading, authenticated, authorized } = useContext(AuthContext);
+use Illuminate\Http\Request;
+use App\Models\User;
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-screen">Carregando...</div>;
-  }
+class AuthController extends Controller
+{
+    public function me(Request $request)
+    {
+        $useKeycloak = env('KEYCLOAK_ENABLED', false);
+        
+        if ($useKeycloak) {
+            // Modo Keycloak: pega usuário do middleware
+            $user = $request->attributes->get('user');
+        } else {
+            // Modo autenticação simples: pega email do token
+            $email = $request->bearerToken();
+            if (!$email) {
+                return response()->json(['error' => 'Token não fornecido'], 401);
+            }
 
-  // Se não está autenticado, redireciona para login
-  if (!authenticated) {
-    return <Navigate to="/login" replace />;
-  }
+            // Decodifica o token base64 para extrair o email
+            try {
+                $decoded = base64_decode($email);
+                $email = explode(':', $decoded)[0];
+            } catch (\Exception $e) {
+                $email = $request->bearerToken();
+            }
 
-  // Se não está autorizado (usuário inativo ou validação falhou)
-  if (!authorized || user === null) {
-    return <Navigate to="/login" replace />;
-  }
-  
-  // Se não tem permissão para acessar a rota
-  if (allowedRoles && !allowedRoles.includes(user.acesso)) {
-    return <Navigate to="/error" replace />;
-  }
+            $user = User::where('email', $email)->first();
+        }
 
-  return children;
+        if (!$user || $user->status != 1) {
+            return response()->json(['error' => 'Usuário não autorizado ou inativo'], 403);
+        }
+
+        return response()->json([
+            'id' => $user->id,
+            'name' => $user->name,
+            'nome' => $user->nome ?? null,
+            'email' => $user->email,
+            'role' => $user->funcao ?? null,
+            'acesso' => $user->permissao ?? null,
+        ]);
+    }
 }
